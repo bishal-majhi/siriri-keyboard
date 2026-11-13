@@ -22,6 +22,7 @@ export ANDROID_NDK_HOME=/path/to/ndk
 Install the APK → open **Siriri Keyboard** → *1. Enable Siriri Keyboard* → *2. Switch to Siriri Keyboard*.
 
 ## Privacy design
+* See [PRIVACY.md](PRIVACY.md) for the full privacy policy.
 * Manifest declares **zero permissions** (no `INTERNET`) — Android blocks all sockets. The settings screen verifies this at runtime.
 * `allowBackup=false` + data-extraction rules exclude everything from cloud/device transfer.
 * Learned words: one file in the app's private storage (`words.bin`), unreadable by other apps. **Settings → Clear all saved words** deletes it; long-press a suggestion to forget one word.
