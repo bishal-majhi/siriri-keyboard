@@ -1,0 +1,19 @@
+[package]
+name = "siriri-core"
+version = "1.0.0"
+edition = "2021"
+description = "Siriri Nepali Keyboard offline engine: layouts, Roman->Devanagari transliteration, on-device word learning"
+
+[lib]
+name = "siriri_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# JNI glue only. No networking, no serde, no logging crates.
+jni = { version = "0.21", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = 1

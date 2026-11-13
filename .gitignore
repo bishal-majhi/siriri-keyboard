@@ -1,0 +1,14 @@
+/build
+/app/build
+/.gradle
+/.kotlin
+/local.properties
+/app/src/main/jniLibs
+/rust-core/target
+*.iml
+.idea/
+*.jks
+*.keystore
+*.pem
+keystore.properties
+/playstore-backup/
