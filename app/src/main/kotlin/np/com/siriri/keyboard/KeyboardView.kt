@@ -32,6 +32,8 @@ class KeyboardView(context: Context) : View(context) {
         fun onShift()
         fun onBackspace()
         fun onPage(page: Int)
+        fun onEmojiToggle()
+        fun onEmojiPick(emoji: String)
         fun onGlobe()
         fun onGlobeLong()
         fun onSpace()
@@ -55,25 +57,183 @@ class KeyboardView(context: Context) : View(context) {
     private var retGlyph = ReturnGlyph.ENTER
     private var suggestions = arrayOf("", "", "")
     private var barVisible = false
+    private var emojiOpen = false
+    private var emojiCategoryIndex = 0
+    private var recentEmojis = EmojiCatalog.DEFAULT_RECENTS
+    private var emojiScrollY = 0f
+    private var leftInset = 0
+    private var rightInset = 0
     private var bottomInset = 0
     private val layoutCache = HashMap<Int, Layout>()
 
-    // ---- metrics (px) --------------------------------------------------------
-    private val density = resources.displayMetrics.density
+    private data class Metrics(
+        val landscape: Boolean,
+        val tablet: Boolean,
+        val largeTablet: Boolean,
+        val rowH: Float,
+        val vGap: Float,
+        val hGap: Float,
+        val topPad: Float,
+        val bottomPad: Float,
+        val barHeight: Float,
+        val keyRadius: Float,
+        val containerRadius: Float,
+        val latinTextSp: Float,
+        val devaTextSp: Float,
+        val modTextSp: Float,
+        val hintTextSp: Float,
+        val suggestionSp: Float,
+        val popupTextSp: Float,
+        val emojiCellH: Float,
+        val emojiFontSp: Float,
+        val contentLeft: Float,
+        val contentRight: Float,
+    ) {
+        val contentWidth: Float get() = (contentRight - contentLeft).coerceAtLeast(1f)
+    }
+
+    private data class PopupPreview(
+        val left: Float,
+        val top: Float,
+        val right: Float,
+        val bottom: Float,
+        val label: String,
+    )
+
+    private var lingerPopup: PopupPreview? = null
+    private val clearLingerRunnable = Runnable {
+        lingerPopup = null
+        invalidate()
+    }
+
+    // ---- metrics (px, adapted dynamically to phone/landscape/7"-11" tablets) -
+    private val density get() = resources.displayMetrics.density
     private fun dp(v: Float) = v * density
     private fun sp(v: Float) = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, v, resources.displayMetrics)
 
-    private val landscape get() = resources.displayMetrics.widthPixels > resources.displayMetrics.heightPixels
-    private val rowH get() = dp(if (landscape) 38f else 46f)
-    private val vGap get() = dp(if (landscape) 6f else 9f)
-    private val hGap = dp(5f)
-    private val side = dp(3f)
-    private val topPad = dp(8f)
-    private val bottomPad = dp(6f)
-    private val keyRadius = dp(6f)
-    private val containerRadius = dp(20f)
-    private val shadowDy = dp(1f)
-    private val barHeight = dp(40f)
+    private var m = computeMetrics(0)
+    private val rowH get() = m.rowH
+    private val vGap get() = m.vGap
+    private val hGap get() = m.hGap
+    private val topPad get() = m.topPad
+    private val bottomPad get() = m.bottomPad
+    private val keyRadius get() = m.keyRadius
+    private val containerRadius get() = m.containerRadius
+    private val barHeight get() = m.barHeight
+    private val shadowDy get() = dp(1f)
+
+    private fun computeMetrics(viewWidthPx: Int): Metrics {
+        val dm = resources.displayMetrics
+        val cfg = resources.configuration
+        val d = dm.density
+        val wPx = (if (viewWidthPx > 0) viewWidthPx else dm.widthPixels).toFloat()
+        val hPx = dm.heightPixels.toFloat()
+        val wDp = wPx / d
+        val swDp = cfg.smallestScreenWidthDp
+        val landscape = dm.widthPixels > dm.heightPixels
+        val largeTablet = swDp >= 700 && wDp >= 680f
+        val tablet = !largeTablet && swDp >= 580 && wDp >= 540f
+
+        var rowH = dp(
+            when {
+                largeTablet -> if (landscape) 52f else 56f
+                tablet -> if (landscape) 46f else 52f
+                landscape -> 35f
+                else -> 46f
+            },
+        )
+        val vGap = dp(
+            when {
+                largeTablet -> 10f
+                tablet -> if (landscape) 8f else 9f
+                landscape -> 5f
+                else -> 9f
+            },
+        )
+        val hGap = dp(
+            when {
+                largeTablet -> 8f
+                tablet -> 6.5f
+                landscape -> 5.5f
+                else -> 5f
+            },
+        )
+        val topPad = dp(if (largeTablet) 10f else if (landscape && !tablet) 5f else 8f)
+        val bottomPad = dp(if (largeTablet) 8f else if (landscape && !tablet) 4f else 6f)
+        val barH = dp(
+            when {
+                largeTablet -> if (landscape) 44f else 48f
+                tablet -> if (landscape) 40f else 42f
+                landscape -> 34f
+                else -> 40f
+            },
+        )
+
+        // Cap vertical keyboard footprint so landscape / split-screen editors stay usable.
+        val rows = layout.rows.size.coerceAtLeast(4)
+        val maxRatio = if (landscape && !tablet && !largeTablet) 0.50f else 0.46f
+        val activeBar = if (barVisible || emojiOpen) barH else 0f
+        val nonRowH = activeBar + topPad + (rows - 1) * vGap + bottomPad + bottomInset
+        val maxRowsH = (hPx * maxRatio - nonRowH).coerceAtLeast(rows * dp(28f))
+        if (rows * rowH > maxRowsH) {
+            rowH = (maxRowsH / rows).coerceAtLeast(dp(28f))
+        }
+
+        val sidePad = dp(
+            when {
+                largeTablet -> if (landscape) 24f else 16f
+                tablet -> if (landscape) 18f else 10f
+                landscape -> 10f
+                else -> 3f
+            },
+        )
+        val maxContentW = dp(
+            when {
+                largeTablet -> if (landscape) 860f else 740f
+                tablet -> if (landscape) 760f else 620f
+                landscape -> 680f
+                else -> 600f
+            },
+        )
+        val availLeft = maxOf(sidePad, leftInset.toFloat() + dp(4f))
+        val availRight = (wPx - maxOf(sidePad, rightInset.toFloat() + dp(4f))).coerceAtLeast(availLeft + dp(200f))
+        val availW = (availRight - availLeft).coerceAtLeast(1f)
+        val contentW = availW.coerceAtMost(maxContentW)
+        val contentLeft = availLeft + (availW - contentW) / 2f
+        val contentRight = contentLeft + contentW
+
+        return Metrics(
+            landscape = landscape,
+            tablet = tablet,
+            largeTablet = largeTablet,
+            rowH = rowH,
+            vGap = vGap,
+            hGap = hGap,
+            topPad = topPad,
+            bottomPad = bottomPad,
+            barHeight = barH,
+            keyRadius = dp(if (largeTablet) 8f else if (tablet) 7f else if (landscape) 5.5f else 6f),
+            containerRadius = dp(if (largeTablet || tablet) 22f else if (landscape) 14f else 20f),
+            latinTextSp = if (largeTablet) 24f else if (tablet) 23f else if (landscape) 19f else 22f,
+            devaTextSp = if (largeTablet) 22f else if (tablet) 21f else if (landscape) 17.5f else 20f,
+            modTextSp = if (largeTablet) 18f else if (tablet) 17f else if (landscape) 14.5f else 16f,
+            hintTextSp = if (largeTablet) 11f else if (tablet) 10.5f else if (landscape) 8.5f else 9.5f,
+            suggestionSp = if (largeTablet) 19f else if (tablet) 18f else if (landscape) 15.5f else 17f,
+            popupTextSp = if (largeTablet) 32f else if (tablet) 30f else if (landscape) 24f else 28f,
+            emojiCellH = dp(if (largeTablet) 48f else if (tablet) 46f else if (landscape) 36f else 44f),
+            emojiFontSp = if (largeTablet) 28f else if (tablet) 26f else if (landscape) 21.5f else 25f,
+            contentLeft = contentLeft,
+            contentRight = contentRight,
+        )
+    }
+
+    fun onConfigChanged() {
+        m = computeMetrics(width)
+        stroke.strokeWidth = dp(if (m.largeTablet) 2.1f else 1.8f)
+        layoutKeys()
+        requestLayout()
+        invalidate()
+    }
 
     // ---- reusable drawing objects --------------------------------------------
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -109,6 +269,17 @@ class KeyboardView(context: Context) : View(context) {
     private var spacePointer = -1
     private var spaceLastX = 0f
     private var spaceSlid = false
+
+    // ---- emoji touch tracking ------------------------------------------------
+    private var emojiGridPointer = -1
+    private var emojiTouchStartY = 0f
+    private var emojiLastY = 0f
+    private var emojiScrolling = false
+    private var emojiDownIndex = -1
+    private val emojiBottomAbc = KeyDef(KeyKind.ABC, "ABC", "", 1.4f)
+    private val emojiBottomGlobe = KeyDef(KeyKind.GLOBE, "", "", 1.2f)
+    private val emojiBottomSpace = KeyDef(KeyKind.SPACE, "", "", 5.4f)
+    private val emojiBottomBksp = KeyDef(KeyKind.BKSP, "", "", 2.0f)
 
     private val repeatRunnable = object : Runnable {
         override fun run() {
@@ -150,6 +321,7 @@ class KeyboardView(context: Context) : View(context) {
         mode = m
         page = p
         layout = layoutCache.getOrPut(m.id * 3 + p) { Layout.parse(Native.layout(m.id, p), m, p) }
+        this.m = computeMetrics(width)
         layoutKeys()
         requestLayout()
         invalidate()
@@ -187,14 +359,39 @@ class KeyboardView(context: Context) : View(context) {
     fun setBarVisible(v: Boolean) {
         if (v == barVisible) return
         barVisible = v
+        m = computeMetrics(width)
         layoutKeys()
         requestLayout()
         invalidate()
     }
 
+    fun setEmojiOpen(open: Boolean, recents: List<String> = recentEmojis) {
+        recentEmojis = if (recents.isEmpty()) EmojiCatalog.DEFAULT_RECENTS else recents
+        val changed = emojiOpen != open
+        emojiOpen = open
+        if (changed) {
+            emojiScrollY = 0f
+            emojiDownIndex = -1
+            emojiGridPointer = -1
+            emojiScrolling = false
+            pressed.clear()
+            lingerPopup = null
+            handler.removeCallbacks(clearLingerRunnable)
+            m = computeMetrics(width)
+            layoutKeys()
+            requestLayout()
+        }
+        invalidate()
+    }
+
+    fun setRecentEmojis(recents: List<String>) {
+        recentEmojis = if (recents.isEmpty()) EmojiCatalog.DEFAULT_RECENTS else recents
+        if (emojiOpen && emojiCategoryIndex == 0) invalidate()
+    }
+
     // ---- measuring & geometry ------------------------------------------------------
 
-    private fun barH() = if (barVisible) barHeight else 0f
+    private fun barH() = if (barVisible || emojiOpen) barHeight else 0f
 
     private fun keysHeight(): Float {
         val n = layout.rows.size.coerceAtLeast(4)
@@ -202,24 +399,34 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
-        val b = if (Build.VERSION.SDK_INT >= 30) {
-            insets.getInsets(WindowInsets.Type.systemBars()).bottom
+        val (l, r, b) = if (Build.VERSION.SDK_INT >= 30) {
+            val ins = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            Triple(ins.left, ins.right, ins.bottom)
         } else {
             @Suppress("DEPRECATION")
-            insets.systemWindowInsetBottom
+            Triple(insets.systemWindowInsetLeft, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
         }
-        if (b != bottomInset) {
+        if (l != leftInset || r != rightInset || b != bottomInset) {
+            leftInset = l
+            rightInset = r
             bottomInset = b
+            m = computeMetrics(width)
+            layoutKeys()
             requestLayout()
+            invalidate()
         }
         return super.onApplyWindowInsets(insets)
     }
 
     override fun onMeasure(widthSpec: Int, heightSpec: Int) {
-        setMeasuredDimension(MeasureSpec.getSize(widthSpec), (barH() + keysHeight()).toInt())
+        val w = MeasureSpec.getSize(widthSpec)
+        m = computeMetrics(w)
+        setMeasuredDimension(w, (barH() + keysHeight()).toInt())
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        m = computeMetrics(w)
+        stroke.strokeWidth = dp(if (m.largeTablet) 2.1f else 1.8f)
         val r = containerRadius
         containerPath.reset()
         containerPath.addRoundRect(
@@ -232,10 +439,11 @@ class KeyboardView(context: Context) : View(context) {
     private fun layoutKeys() {
         val w = width.toFloat()
         if (w <= 0f || layout.rows.isEmpty()) return
-        val unit = (w - 2 * side - (layout.cols - 1) * hGap) / layout.cols
+        val cw = m.contentWidth
+        val unit = (cw - (layout.cols - 1) * hGap) / layout.cols
         val keysTop = barH() + topPad
         for ((ri, row) in layout.rows.withIndex()) {
-            var x = side
+            var x = m.contentLeft
             val top = keysTop + ri * (rowH + vGap)
             for (k in row) {
                 val span = k.weight * (unit + hGap)
@@ -250,6 +458,21 @@ class KeyboardView(context: Context) : View(context) {
                 }
             }
         }
+        layoutEmojiBottomRow(cw)
+    }
+
+    private fun layoutEmojiBottomRow(contentW: Float) {
+        val unit = (contentW - 9 * hGap) / 10f
+        val top = barH() + topPad + 3 * (rowH + vGap)
+        var x = m.contentLeft
+        for (k in listOf(emojiBottomAbc, emojiBottomGlobe, emojiBottomSpace, emojiBottomBksp)) {
+            val span = k.weight * (unit + hGap)
+            k.left = x
+            k.right = x + span - hGap
+            k.top = top
+            k.bottom = top + rowH
+            x = k.right + hGap
+        }
     }
 
     // ---- drawing -------------------------------------------------------------------
@@ -259,22 +482,28 @@ class KeyboardView(context: Context) : View(context) {
         fill.color = theme.container
         canvas.drawPath(containerPath, fill)
 
+        if (emojiOpen) {
+            drawEmojiPanel(canvas)
+            drawPopups(canvas)
+            return
+        }
+
         if (barVisible) drawSuggestions(canvas)
         for (row in layout.rows) for (k in row) if (k.kind != KeyKind.SPACER) drawKey(canvas, k)
         drawPopups(canvas)
     }
 
     private fun drawSuggestions(canvas: Canvas) {
-        val slotW = width / 3f
+        val slotW = m.contentWidth / 3f
         suggestionPaint.color = theme.suggestion
-        suggestionPaint.textSize = sp(17f)
+        suggestionPaint.textSize = sp(m.suggestionSp)
         val fm = suggestionPaint.fontMetrics
         val baseline = barHeight / 2f - (fm.ascent + fm.descent) / 2f
         for (i in 0..2) {
             val s = suggestions[i]
             if (s.isEmpty()) continue
             val fitted = TextUtils.ellipsize(s, suggestionPaint, slotW - dp(16f), TextUtils.TruncateAt.END)
-            canvas.drawText(fitted.toString(), slotW * i + slotW / 2f, baseline, suggestionPaint)
+            canvas.drawText(fitted.toString(), m.contentLeft + slotW * i + slotW / 2f, baseline, suggestionPaint)
         }
     }
 
@@ -329,24 +558,34 @@ class KeyboardView(context: Context) : View(context) {
                 drawLabel(canvas, lbl, k, cx, cy, fg, labelSize(lbl))
                 if (k.hint.isNotEmpty()) {
                     text.color = theme.hint
-                    text.textSize = sp(9.5f)
+                    text.textSize = sp(m.hintTextSp)
                     text.textAlign = Paint.Align.RIGHT
                     canvas.drawText(k.hint, k.right - dp(3.5f), k.top + dp(11f), text)
                     text.textAlign = Paint.Align.CENTER
                 }
             }
-            KeyKind.NUM, KeyKind.SYM, KeyKind.ABC -> drawLabel(canvas, k.base, k, cx, cy, fg, 16f)
-            KeyKind.SPACE -> drawBadge(canvas, k)
+            KeyKind.NUM, KeyKind.SYM, KeyKind.ABC -> drawLabel(canvas, k.base, k, cx, cy, fg, m.modTextSp)
+            KeyKind.SPACE -> Unit
             KeyKind.SHIFT -> drawShift(canvas, cx, cy, s)
             KeyKind.BKSP -> drawBackspace(canvas, cx, cy, s)
-            KeyKind.GLOBE -> drawGlobe(canvas, cx, cy, s)
+            KeyKind.EMOJI -> drawEmojiIcon(canvas, cx, cy, s)
+            KeyKind.GLOBE -> drawLabel(canvas, mode.badge, k, cx, cy, fg, m.modTextSp)
             KeyKind.RET -> drawReturn(canvas, cx, cy, s)
             else -> Unit
         }
     }
 
-    /** Floating key-press preview bubble above any currently pressed character key. */
+    /** iOS-style connected keyhole preview bubble above pressed keys (and recent quick releases). */
     private fun drawPopups(canvas: Canvas) {
+        var drawn = false
+        if (emojiOpen && emojiDownIndex >= 0 && !emojiScrolling) {
+            val emojis = activeEmojis()
+            if (emojiDownIndex < emojis.size) {
+                val b = emojiCellBounds(emojiDownIndex)
+                drawKeyholePopup(canvas, b.left + dp(2f), b.top + dp(2f), b.right - dp(2f), b.bottom - dp(2f), emojis[emojiDownIndex], keyW = b.width())
+                drawn = true
+            }
+        }
         for (i in 0 until pressed.size()) {
             val pid = pressed.keyAt(i)
             val k = pressed.valueAt(i)
@@ -356,30 +595,86 @@ class KeyboardView(context: Context) : View(context) {
             } else {
                 k.text(shift != ShiftState.OFF)
             }
-            val pw = ((k.right - k.left) * 1.24f).coerceAtLeast(dp(38f))
-            val ph = rowH * 1.15f
-            val cx = ((k.left + k.right) / 2f).coerceIn(pw / 2f + dp(4f), width - pw / 2f - dp(4f))
-            val bottom = (k.top - dp(4f)).coerceAtLeast(ph + dp(2f))
-            val top = bottom - ph
-
-            rect.set(cx - pw / 2f, top + shadowDy * 1.5f, cx + pw / 2f, bottom + shadowDy * 1.5f)
-            fill.color = theme.shadow
-            canvas.drawRoundRect(rect, keyRadius * 1.3f, keyRadius * 1.3f, fill)
-
-            rect.set(cx - pw / 2f, top, cx + pw / 2f, bottom)
-            fill.color = theme.popupBg
-            canvas.drawRoundRect(rect, keyRadius * 1.3f, keyRadius * 1.3f, fill)
-
-            text.color = theme.label
-            text.textSize = sp(26f)
-            val fm = text.fontMetrics
-            canvas.drawText(label, cx, (top + bottom) / 2f - (fm.ascent + fm.descent) / 2f, text)
+            drawKeyholePopup(canvas, k.left, k.top, k.right, k.bottom, label, keyW = k.right - k.left)
+            drawn = true
         }
+        val linger = lingerPopup
+        if (!drawn && linger != null) {
+            drawKeyholePopup(
+                canvas, linger.left, linger.top, linger.right, linger.bottom,
+                linger.label, keyW = linger.right - linger.left,
+            )
+        }
+    }
+
+    private fun showLingerPopup(left: Float, top: Float, right: Float, bottom: Float, label: String) {
+        lingerPopup = PopupPreview(left, top, right, bottom, label)
+        handler.removeCallbacks(clearLingerRunnable)
+        handler.postDelayed(clearLingerRunnable, 85L)
+    }
+
+    private fun drawKeyholePopup(
+        canvas: Canvas,
+        bl: Float,
+        bt: Float,
+        br: Float,
+        bb: Float,
+        label: String,
+        keyW: Float,
+    ) {
+        val pw = (keyW * 1.44f).coerceIn(dp(40f), dp(82f))
+        val headH = (rowH * 1.02f).coerceIn(dp(36f), dp(62f))
+        val cx = ((bl + br) / 2f).coerceIn(pw / 2f + dp(4f), width - pw / 2f - dp(4f))
+        val hl = cx - pw / 2f
+        val hr = cx + pw / 2f
+        val ht = (bt - headH).coerceAtLeast(dp(2f))
+        val flareY = (bt - dp(2f)).coerceAtLeast(ht + headH * 0.72f)
+        val neckY = (bt + dp(10f)).coerceAtMost(bb - keyRadius)
+        val hrCorner = dp(9f)
+        val brCorner = keyRadius
+
+        path.reset()
+        path.moveTo(hl + hrCorner, ht)
+        path.lineTo(hr - hrCorner, ht)
+        path.quadTo(hr, ht, hr, ht + hrCorner)
+        path.lineTo(hr, flareY)
+        path.cubicTo(hr, neckY, br, flareY, br, neckY + dp(4f))
+        path.lineTo(br, bb - brCorner)
+        path.quadTo(br, bb, br - brCorner, bb)
+        path.lineTo(bl + brCorner, bb)
+        path.quadTo(bl, bb, bl, bb - brCorner)
+        path.lineTo(bl, neckY + dp(4f))
+        path.cubicTo(bl, flareY, hl, neckY, hl, flareY)
+        path.lineTo(hl, ht + hrCorner)
+        path.quadTo(hl, ht, hl + hrCorner, ht)
+        path.close()
+
+        fill.style = Paint.Style.FILL
+        fill.color = theme.shadow
+        canvas.save()
+        canvas.translate(0f, dp(1.5f))
+        canvas.drawPath(path, fill)
+        canvas.restore()
+
+        fill.color = theme.popupBg
+        canvas.drawPath(path, fill)
+
+        val prevStrokeW = stroke.strokeWidth
+        stroke.strokeWidth = dp(0.8f)
+        stroke.color = theme.shadow
+        canvas.drawPath(path, stroke)
+        stroke.strokeWidth = prevStrokeW
+
+        text.color = theme.label
+        text.textSize = sp(m.popupTextSp)
+        val fm = text.fontMetrics
+        val headCenterY = (ht + flareY) / 2f
+        canvas.drawText(label, cx, headCenterY - (fm.ascent + fm.descent) / 2f, text)
     }
 
     /** Devanagari glyphs sit a little smaller than Latin ones. */
     private fun labelSize(s: String): Float =
-        if (s.isNotEmpty() && s[0].code >= 0x0900) 20f else 22f
+        if (s.isNotEmpty() && s[0].code >= 0x0900) m.devaTextSp else m.latinTextSp
 
     private fun drawLabel(canvas: Canvas, s: String, k: KeyDef, cx: Float, cy: Float, color: Int, size: Float) {
         text.color = color
@@ -391,13 +686,16 @@ class KeyboardView(context: Context) : View(context) {
         canvas.drawText(s, cx, cy - (fm.ascent + fm.descent) / 2f, text)
     }
 
-    /** The tiny mode badge (A / क / ने / हि) in the spacebar's bottom-right corner. */
-    private fun drawBadge(canvas: Canvas, k: KeyDef) {
-        text.color = theme.badge
-        text.textSize = sp(11f)
-        text.textAlign = Paint.Align.RIGHT
-        canvas.drawText(mode.badge, k.right - dp(8f), k.bottom - dp(7f), text)
-        text.textAlign = Paint.Align.CENTER
+    private fun drawEmojiIcon(canvas: Canvas, cx: Float, cy: Float, s: Float) {
+        val r = s * 0.72f
+        canvas.drawCircle(cx, cy, r, stroke)
+        val prevStyle = fill.style
+        fill.style = Paint.Style.FILL
+        canvas.drawCircle(cx - r * 0.34f, cy - r * 0.2f, dp(1.6f), fill)
+        canvas.drawCircle(cx + r * 0.34f, cy - r * 0.2f, dp(1.6f), fill)
+        fill.style = prevStyle
+        rect.set(cx - r * 0.5f, cy - r * 0.3f, cx + r * 0.5f, cy + r * 0.55f)
+        canvas.drawArc(rect, 20f, 140f, false, stroke)
     }
 
     private fun drawShift(canvas: Canvas, cx: Float, cy: Float, s: Float) {
@@ -431,11 +729,91 @@ class KeyboardView(context: Context) : View(context) {
         canvas.drawLine(cx - s * 0.05f, cy + s * 0.2f, cx + s * 0.45f, cy - s * 0.2f, stroke)
     }
 
-    private fun drawGlobe(canvas: Canvas, cx: Float, cy: Float, s: Float) {
-        canvas.drawCircle(cx, cy, s * 0.7f, stroke)
-        rect.set(cx - s * 0.3f, cy - s * 0.7f, cx + s * 0.3f, cy + s * 0.7f)
-        canvas.drawOval(rect, stroke)
-        canvas.drawLine(cx - s * 0.7f, cy, cx + s * 0.7f, cy, stroke)
+    private fun activeEmojis(): List<String> =
+        if (emojiCategoryIndex == 0) recentEmojis else EmojiCatalog.CATEGORIES[emojiCategoryIndex].emojis
+
+    private fun emojiCols(): Int {
+        val targetCellW = dp(if (m.largeTablet) 48f else if (m.tablet) 46f else if (m.landscape) 40f else 44f)
+        return (m.contentWidth / targetCellW).toInt().coerceIn(7, 16)
+    }
+
+    private fun emojiGridTop(): Float = barHeight + dp(4f)
+
+    private fun emojiGridBottom(): Float = emojiBottomAbc.top - dp(6f)
+
+    private fun emojiCellBounds(index: Int): RectF {
+        val cols = emojiCols()
+        val cellW = m.contentWidth / cols
+        val cellH = m.emojiCellH
+        val col = index % cols
+        val row = index / cols
+        val left = m.contentLeft + col * cellW
+        val top = emojiGridTop() + row * cellH - emojiScrollY
+        return RectF(left, top, left + cellW, top + cellH)
+    }
+
+    private fun emojiMaxScroll(): Float {
+        val count = activeEmojis().size
+        val cols = emojiCols()
+        val rows = (count + cols - 1) / cols
+        val contentH = rows * m.emojiCellH
+        val viewportH = (emojiGridBottom() - emojiGridTop()).coerceAtLeast(1f)
+        return (contentH - viewportH).coerceAtLeast(0f)
+    }
+
+    private fun drawEmojiPanel(canvas: Canvas) {
+        val cats = EmojiCatalog.CATEGORIES
+        val tabW = m.contentWidth / cats.size.toFloat()
+        for ((i, cat) in cats.withIndex()) {
+            val l = m.contentLeft + tabW * i + dp(3f)
+            val r = m.contentLeft + tabW * (i + 1) - dp(3f)
+            if (i == emojiCategoryIndex) {
+                fill.style = Paint.Style.FILL
+                fill.color = theme.charKey
+                rect.set(l, dp(4f), r, barHeight - dp(4f))
+                canvas.drawRoundRect(rect, keyRadius, keyRadius, fill)
+            }
+            text.color = theme.label
+            text.textSize = sp(if (m.landscape && !m.tablet && !m.largeTablet) 16f else 18f)
+            val fm = text.fontMetrics
+            canvas.drawText(cat.icon, (l + r) / 2f, barHeight / 2f - (fm.ascent + fm.descent) / 2f, text)
+        }
+
+        val emojis = activeEmojis()
+        val cols = emojiCols()
+        val cellW = m.contentWidth / cols
+        val cellH = m.emojiCellH
+        val gTop = emojiGridTop()
+        val gBottom = emojiGridBottom()
+        canvas.save()
+        canvas.clipRect(m.contentLeft, gTop, m.contentRight, gBottom)
+        text.color = theme.label
+        text.textSize = sp(m.emojiFontSp)
+        val fm = text.fontMetrics
+        val baselineOffset = -(fm.ascent + fm.descent) / 2f
+        val firstRow = (emojiScrollY / cellH).toInt().coerceAtLeast(0)
+        val lastRow = ((emojiScrollY + (gBottom - gTop)) / cellH).toInt()
+        for (row in firstRow..lastRow) {
+            for (col in 0 until cols) {
+                val idx = row * cols + col
+                if (idx >= emojis.size) break
+                val cx = m.contentLeft + (col + 0.5f) * cellW
+                val cy = gTop + (row + 0.5f) * cellH - emojiScrollY
+                if (idx == emojiDownIndex && !emojiScrolling) {
+                    fill.style = Paint.Style.FILL
+                    fill.color = theme.charPressed
+                    rect.set(cx - cellW * 0.44f, cy - cellH * 0.44f, cx + cellW * 0.44f, cy + cellH * 0.44f)
+                    canvas.drawRoundRect(rect, keyRadius, keyRadius, fill)
+                }
+                canvas.drawText(emojis[idx], cx, cy + baselineOffset, text)
+            }
+        }
+        canvas.restore()
+
+        drawKey(canvas, emojiBottomAbc)
+        drawKey(canvas, emojiBottomGlobe)
+        drawKey(canvas, emojiBottomSpace)
+        drawKey(canvas, emojiBottomBksp)
     }
 
     private fun drawReturn(canvas: Canvas, cx: Float, cy: Float, s: Float) {
@@ -482,6 +860,22 @@ class KeyboardView(context: Context) : View(context) {
                 pointerDown(e.getPointerId(i), e.getX(i), e.getY(i))
             }
             MotionEvent.ACTION_MOVE -> {
+                if (emojiOpen && emojiGridPointer != -1) {
+                    val idx = e.findPointerIndex(emojiGridPointer)
+                    if (idx >= 0) {
+                        val y = e.getY(idx)
+                        if (!emojiScrolling && kotlin.math.abs(y - emojiTouchStartY) > dp(6f)) {
+                            emojiScrolling = true
+                            emojiDownIndex = -1
+                        }
+                        if (emojiScrolling) {
+                            val dy = emojiLastY - y
+                            emojiScrollY = (emojiScrollY + dy).coerceIn(0f, emojiMaxScroll())
+                            emojiLastY = y
+                            invalidate()
+                        }
+                    }
+                }
                 if (spacePointer != -1) {
                     val idx = e.findPointerIndex(spacePointer)
                     if (idx >= 0) {
@@ -504,6 +898,37 @@ class KeyboardView(context: Context) : View(context) {
             MotionEvent.ACTION_CANCEL -> cancelAll()
         }
         return true
+    }
+
+    private fun emojiIndexAt(x: Float, y: Float): Int {
+        if (y < emojiGridTop() || y > emojiGridBottom()) return -1
+        if (x < m.contentLeft || x > m.contentRight) return -1
+        val cols = emojiCols()
+        val cellW = m.contentWidth / cols
+        val cellH = m.emojiCellH
+        val col = ((x - m.contentLeft) / cellW).toInt().coerceIn(0, cols - 1)
+        val row = ((y - emojiGridTop() + emojiScrollY) / cellH).toInt().coerceAtLeast(0)
+        val idx = row * cols + col
+        return if (idx in activeEmojis().indices) idx else -1
+    }
+
+    private fun suggestionSlotAt(x: Float): Int {
+        val slotW = m.contentWidth / 3f
+        return ((x - m.contentLeft) / slotW).toInt().coerceIn(0, 2)
+    }
+
+    private fun emojiCategoryAt(x: Float): Int {
+        val cats = EmojiCatalog.CATEGORIES
+        val tabW = m.contentWidth / cats.size.toFloat()
+        return ((x - m.contentLeft) / tabW).toInt().coerceIn(0, cats.size - 1)
+    }
+
+    private fun emojiBottomKeyAt(x: Float, y: Float): KeyDef? {
+        if (y < emojiBottomAbc.top - vGap / 2f) return null
+        val row = listOf(emojiBottomAbc, emojiBottomGlobe, emojiBottomSpace, emojiBottomBksp)
+        return row.minByOrNull { k ->
+            if (x < k.left) k.left - x else if (x > k.right) x - k.right else 0f
+        }
     }
 
     private fun keyAt(x: Float, y: Float): KeyDef? {
@@ -535,8 +960,60 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     private fun pointerDown(id: Int, x: Float, y: Float) {
+        handler.removeCallbacks(clearLingerRunnable)
+        lingerPopup = null
+
+        if (emojiOpen) {
+            if (y < barHeight) {
+                val nextCat = emojiCategoryAt(x)
+                if (nextCat != emojiCategoryIndex) {
+                    emojiCategoryIndex = nextCat
+                    emojiScrollY = 0f
+                }
+                feedback()
+                invalidate()
+                return
+            }
+            val bottomKey = emojiBottomKeyAt(x, y)
+            if (bottomKey != null) {
+                val l = listener ?: return
+                pressed.put(id, bottomKey)
+                invalidate()
+                feedback()
+                when (bottomKey.kind) {
+                    KeyKind.ABC -> l.onEmojiToggle()
+                    KeyKind.GLOBE -> {
+                        globePointer = id
+                        globeLongFired = false
+                        handler.postDelayed(globeLongRunnable, 450)
+                    }
+                    KeyKind.SPACE -> {
+                        spacePointer = id
+                        spaceLastX = x
+                        spaceSlid = false
+                    }
+                    KeyKind.BKSP -> {
+                        l.onBackspace()
+                        repeatPointer = id
+                        handler.removeCallbacks(repeatRunnable)
+                        handler.postDelayed(repeatRunnable, 400)
+                    }
+                    else -> Unit
+                }
+                return
+            }
+            val idx = emojiIndexAt(x, y)
+            emojiGridPointer = id
+            emojiTouchStartY = y
+            emojiLastY = y
+            emojiScrolling = false
+            emojiDownIndex = idx
+            if (idx >= 0) invalidate()
+            return
+        }
+
         if (barVisible && y < barHeight) {
-            val slot = (x / (width / 3f)).toInt().coerceIn(0, 2)
+            val slot = suggestionSlotAt(x)
             barDown.put(id, slot)
             barLongPointer = id
             barLongFired = false
@@ -573,6 +1050,7 @@ class KeyboardView(context: Context) : View(context) {
             KeyKind.NUM -> l.onPage(1)
             KeyKind.SYM -> l.onPage(2)
             KeyKind.ABC -> l.onPage(0)
+            KeyKind.EMOJI -> l.onEmojiToggle()
             KeyKind.RET -> l.onReturn()
             KeyKind.BKSP -> {
                 l.onBackspace()
@@ -590,12 +1068,32 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     private fun pointerUp(id: Int, x: Float, y: Float) {
+        if (emojiOpen && id == emojiGridPointer) {
+            val idx = emojiDownIndex
+            val wasScrolling = emojiScrolling
+            emojiGridPointer = -1
+            emojiScrolling = false
+            emojiDownIndex = -1
+            if (!wasScrolling && idx >= 0) {
+                val emojis = activeEmojis()
+                if (idx < emojis.size) {
+                    val emoji = emojis[idx]
+                    val b = emojiCellBounds(idx)
+                    showLingerPopup(b.left + dp(2f), b.top + dp(2f), b.right - dp(2f), b.bottom - dp(2f), emoji)
+                    feedback()
+                    listener?.onEmojiPick(emoji)
+                }
+            }
+            invalidate()
+            return
+        }
+
         val slot = barDown.get(id, -1)
         if (slot >= 0) {
             barDown.remove(id)
             if (id == barLongPointer) {
                 handler.removeCallbacks(barLongRunnable)
-                if (!barLongFired && y < barHeight && slot == (x / (width / 3f)).toInt().coerceIn(0, 2)) {
+                if (!barLongFired && y < barHeight && slot == suggestionSlotAt(x)) {
                     feedback()
                     listener?.onSuggestion(slot)
                 }
@@ -604,6 +1102,14 @@ class KeyboardView(context: Context) : View(context) {
         }
         val k = pressed.get(id) ?: return
         pressed.remove(id)
+        if (k.kind == KeyKind.CHAR) {
+            val label = if (id == charLongPointer && charLongFired && k.hint.isNotEmpty()) {
+                k.hint
+            } else {
+                k.text(shift != ShiftState.OFF)
+            }
+            showLingerPopup(k.left, k.top, k.right, k.bottom, label)
+        }
         invalidateKey(k)
         if (id == charLongPointer) {
             handler.removeCallbacks(charLongRunnable)
@@ -630,11 +1136,16 @@ class KeyboardView(context: Context) : View(context) {
         handler.removeCallbacks(globeLongRunnable)
         handler.removeCallbacks(barLongRunnable)
         handler.removeCallbacks(charLongRunnable)
+        handler.removeCallbacks(clearLingerRunnable)
         repeatPointer = -1
         globePointer = -1
         charLongPointer = -1
         charLongFired = false
         spacePointer = -1
+        emojiGridPointer = -1
+        emojiDownIndex = -1
+        emojiScrolling = false
+        lingerPopup = null
         pressed.clear()
         barDown.clear()
         invalidate()

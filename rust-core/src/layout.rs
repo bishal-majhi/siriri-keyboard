@@ -9,7 +9,7 @@
 //! where `<key>` = `kind \x1f base \x1f shift \x1f weight`.
 //!
 //! * `kind`   : `C` char, `_` spacer, `SHIFT`, `BKSP`, `NUM`, `SYM`, `ABC`,
-//!              `GLOBE`, `SPACE`, `RET`
+//!              `EMOJI`, `GLOBE`, `SPACE`, `RET`
 //! * `base`   : text committed (for `C`) or the label (for modifier keys)
 //! * `shift`  : text committed while shifted (empty = same as `base`)
 //! * `weight` : width in grid columns (1.0 = one letter key)
@@ -75,9 +75,14 @@ fn weighted(mut keys: Vec<K>, w: f32) -> Vec<K> {
 }
 
 fn bottom_row(first_kind: &'static str, first_label: &str, wide: bool) -> Vec<K> {
-    let (a, b, c, d) = if wide { (1.4, 1.4, 5.8, 2.4) } else { (1.25, 1.25, 5.0, 2.5) };
+    let (a, e, b, c, d) = if wide {
+        (1.3, 1.15, 1.15, 5.2, 2.2)
+    } else {
+        (1.2, 1.05, 1.05, 4.6, 2.1)
+    };
     vec![
         special(first_kind, first_label, a),
+        special("EMOJI", "", e),
         special("GLOBE", "", b),
         special("SPACE", "", c),
         special("RET", "", d),
@@ -249,6 +254,18 @@ mod tests {
         let all = format!("{}{}", layout(Mode::Nepali, Page::Numbers), layout(Mode::Nepali, Page::Symbols));
         for s in ["१", "०", "ऽ", "ॐ", "।", "॥"] {
             assert!(all.contains(s), "missing {s}");
+        }
+    }
+
+    #[test]
+    fn bottom_row_places_emoji_between_first_and_globe() {
+        for mode in [Mode::English, Mode::Nepali, Mode::NepaliRoman, Mode::HindiRoman] {
+            for page in [Page::Letters, Page::Numbers, Page::Symbols] {
+                let (_, rows) = parse(&layout(mode, page));
+                let kinds: Vec<&str> = rows[3].iter().map(|k| k.0.as_str()).collect();
+                let expected_first = if page == Page::Letters { "NUM" } else { "ABC" };
+                assert_eq!(kinds, vec![expected_first, "EMOJI", "GLOBE", "SPACE", "RET"]);
+            }
         }
     }
 }

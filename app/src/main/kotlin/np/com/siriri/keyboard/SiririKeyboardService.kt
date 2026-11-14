@@ -35,6 +35,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     private var page = 0
     private var shift = ShiftState.OFF
     private var lastShiftTap = 0L
+    private var emojiOpen = false
 
     // ---- field state (set in onStartInputView) ----
     private var latinOnly = false      // password / e-mail / URL / numeric
@@ -88,7 +89,10 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        if (::kb.isInitialized) applyTheme()
+        if (::kb.isInitialized) {
+            applyTheme()
+            kb.onConfigChanged()
+        }
     }
 
     private fun applyTheme() {
@@ -162,9 +166,11 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
         selStart = info.initialSelStart.coerceAtLeast(0)
         selEnd = info.initialSelEnd.coerceAtLeast(0)
         shift = ShiftState.OFF
+        emojiOpen = false
 
         kb.haptics = prefs.haptic
         kb.sound = prefs.sound
+        kb.setEmojiOpen(false, prefs.recentEmojis())
         resync()
         pushModeToView()
         updateAutoShift()
@@ -431,8 +437,35 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onPage(page: Int) {
+        if (emojiOpen) {
+            emojiOpen = false
+            kb.setEmojiOpen(false, prefs.recentEmojis())
+        }
         this.page = page
         kb.setMode(mode, page)
+    }
+
+    override fun onEmojiToggle() {
+        if (!emojiOpen) {
+            commitComposing(learn = true)
+            learnWord(word.toString())
+            word.setLength(0)
+        }
+        emojiOpen = !emojiOpen
+        kb.setEmojiOpen(emojiOpen, prefs.recentEmojis())
+    }
+
+    override fun onEmojiPick(emoji: String) {
+        if (currentInputConnection == null || emoji.isEmpty()) return
+        if (mode.roman) commitComposing(learn = true)
+        learnWord(word.toString())
+        word.setLength(0)
+        spaceAfterWord = false
+        commit(emoji)
+        prefs.addRecentEmoji(emoji)
+        kb.setRecentEmojis(prefs.recentEmojis())
+        updateAutoShift()
+        refreshSuggestions()
     }
 
     override fun onGlobe() {
@@ -488,7 +521,8 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     override fun onSuggestion(index: Int) {
         val s = kb.suggestionAt(index)
         if (s.isEmpty()) return
-        if (mode.roman) {
+        val isEmoji = EmojiCatalog.isEmoji(s)
+        if (mode.roman && roman.isNotEmpty()) {
             roman.setLength(0)
             commit("$s ") // replaces the composing region
         } else {
@@ -496,9 +530,15 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
             commit("$s ")
         }
         word.setLength(0)
-        learnWord(s)
-        spaceAfterWord = true
-        lastSpaceAt = SystemClock.uptimeMillis()
+        if (isEmoji) {
+            prefs.addRecentEmoji(s)
+            kb.setRecentEmojis(prefs.recentEmojis())
+            spaceAfterWord = false
+        } else {
+            learnWord(s)
+            spaceAfterWord = true
+            lastSpaceAt = SystemClock.uptimeMillis()
+        }
         updateAutoShift()
         refreshSuggestions()
     }
@@ -506,7 +546,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     /** Long-press a suggestion = forget that word. */
     override fun onSuggestionLong(index: Int) {
         val s = kb.suggestionAt(index)
-        if (s.isEmpty()) return
+        if (s.isEmpty() || EmojiCatalog.isEmoji(s)) return
         Native.forget(s)
         refreshSuggestions()
     }
@@ -526,6 +566,16 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
             val cap = prefix.firstOrNull()?.isUpperCase() == true ||
                 (prefix.isEmpty() && shift != ShiftState.OFF)
             list = list.map { englishCase(it, cap) }
+        }
+        val emojiQuery = when {
+            mode.roman && roman.isNotEmpty() -> roman.toString()
+            prefix.isNotEmpty() -> prefix
+            else -> prevWord
+        }
+        val emojis = EmojiCatalog.suggestEmojis(emojiQuery, limit = 2)
+        if (emojis.isNotEmpty()) {
+            // Surface matching emoji(s) on the right side (keeping up to 2 text suggestions).
+            list = (list.take(2) + emojis).distinct().take(3)
         }
         kb.setSuggestions(list)
     }

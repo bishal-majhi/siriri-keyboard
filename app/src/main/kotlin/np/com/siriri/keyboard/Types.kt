@@ -2,10 +2,10 @@ package np.com.siriri.keyboard
 
 /** Typing modes. [id] matches `Mode` in `rust-core/src/lib.rs`. */
 enum class Mode(val id: Int, val badge: String, val roman: Boolean, val title: String) {
-    ENGLISH(0, "A", false, "English"),
-    NEPALI(1, "क", false, "Traditional Nepali (क)"),
-    NEPALI_ROMAN(2, "ने", true, "Nepali Roman (ने)"),
-    HINDI_ROMAN(3, "हि", true, "Hindi Roman (हि)");
+    ENGLISH(0, "En", false, "English (En)"),
+    NEPALI(1, "ने", false, "Traditional Nepali (ने)"),
+    NEPALI_ROMAN(2, "Np", true, "Roman Nepali (Np)"),
+    HINDI_ROMAN(3, "Hi", true, "Hindi (Hi)");
 
     /** All modes show the suggestion strip when allowed by the text field. */
     val showsSuggestions: Boolean get() = true
@@ -13,18 +13,24 @@ enum class Mode(val id: Int, val badge: String, val roman: Boolean, val title: S
     /** Sentence terminator inserted by double-space. */
     val sentenceEnd: String get() = if (this == ENGLISH) "." else "।"
 
-    fun next(): Mode = entries[(ordinal + 1) % entries.size]
+    fun next(): Mode {
+        val idx = CYCLE_ORDER.indexOf(this)
+        return CYCLE_ORDER[(idx + 1) % CYCLE_ORDER.size]
+    }
 
     fun nextEnabled(isEnabled: (Mode) -> Boolean): Mode {
-        val all = entries
-        for (step in 1..all.size) {
-            val candidate = all[(ordinal + step) % all.size]
+        val idx = CYCLE_ORDER.indexOf(this).coerceAtLeast(0)
+        for (step in 1..CYCLE_ORDER.size) {
+            val candidate = CYCLE_ORDER[(idx + step) % CYCLE_ORDER.size]
             if (isEnabled(candidate)) return candidate
         }
         return ENGLISH
     }
 
     companion object {
+        /** Tap cycle order for the language key: En -> ने -> Hi -> Np. */
+        val CYCLE_ORDER: List<Mode> = listOf(ENGLISH, NEPALI, HINDI_ROMAN, NEPALI_ROMAN)
+
         fun fromId(id: Int): Mode = entries.firstOrNull { it.id == id } ?: ENGLISH
     }
 }
@@ -35,4 +41,4 @@ enum class ReturnStyle { NEUTRAL, GRAY, BLUE }
 
 enum class ReturnGlyph { ENTER, SEARCH, ARROW, CHECK }
 
-enum class KeyKind { CHAR, SPACER, SHIFT, BKSP, NUM, SYM, ABC, GLOBE, SPACE, RET }
+enum class KeyKind { CHAR, SPACER, SHIFT, BKSP, NUM, SYM, ABC, EMOJI, GLOBE, SPACE, RET }

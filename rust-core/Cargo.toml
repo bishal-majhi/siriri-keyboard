@@ -1,6 +1,6 @@
 [package]
 name = "siriri-core"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 description = "Siriri Nepali Keyboard offline engine: layouts, Roman->Devanagari transliteration, on-device word learning"
 

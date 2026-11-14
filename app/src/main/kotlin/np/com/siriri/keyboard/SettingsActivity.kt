@@ -14,6 +14,7 @@ import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
@@ -64,7 +65,7 @@ class SettingsActivity : Activity() {
         }
 
         col.addView(label("Siriri Nepali Keyboard", 24f, bold = true))
-        col.addView(label("English · नेपाली · Nepali Roman · Hindi Roman", 14f))
+        col.addView(label("English (En) · नेपाली (ने) · Hindi (Hi) · Roman Nepali (Np)", 14f))
 
         // --- setup ---
         col.addView(label("Setup", 18f, bold = true, topMargin = 24))
@@ -94,9 +95,9 @@ class SettingsActivity : Activity() {
         col.addView(toggle("Sound on key press", prefs.sound) { prefs.sound = it })
 
         // --- languages ---
-        col.addView(label("Languages (Globe key)", 18f, bold = true, topMargin = 24))
+        col.addView(label("Languages (En / ने / Hi / Np key)", 18f, bold = true, topMargin = 24))
         val modeSwitches = HashMap<Mode, Switch>()
-        for (m in Mode.entries) {
+        for (m in Mode.CYCLE_ORDER) {
             val sw = toggle(m.title, prefs.isModeEnabled(m)) { enabled ->
                 prefs.setModeEnabled(m, enabled)
                 for ((mode, view) in modeSwitches) {
@@ -131,9 +132,17 @@ class SettingsActivity : Activity() {
             },
         )
 
+        val maxW = resources.displayMetrics.widthPixels.coerceAtMost(dp(600))
+        val container = FrameLayout(this).apply {
+            addView(
+                col,
+                FrameLayout.LayoutParams(maxW, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL),
+            )
+        }
         setContentView(ScrollView(this).apply {
             fitsSystemWindows = true
-            addView(col)
+            isFillViewport = true
+            addView(container)
         })
     }
 

@@ -35,6 +35,7 @@ class Layout(val cols: Int, val rows: List<List<KeyDef>>) {
                         "NUM" -> KeyKind.NUM
                         "SYM" -> KeyKind.SYM
                         "ABC" -> KeyKind.ABC
+                        "EMOJI" -> KeyKind.EMOJI
                         "GLOBE" -> KeyKind.GLOBE
                         "SPACE" -> KeyKind.SPACE
                         "RET" -> KeyKind.RET

@@ -34,4 +34,16 @@ class Prefs(context: Context) {
             sp.edit().putBoolean("mode_${Mode.ENGLISH.id}", true).apply()
         }
     }
+
+    /** Most recently used emojis, newest first. */
+    fun recentEmojis(): List<String> {
+        val raw = sp.getString("recent_emojis", "") ?: ""
+        return if (raw.isEmpty()) emptyList() else raw.split('\t').filter { it.isNotEmpty() }
+    }
+
+    fun addRecentEmoji(emoji: String) {
+        if (emoji.isEmpty()) return
+        val next = (listOf(emoji) + recentEmojis().filter { it != emoji }).take(24)
+        sp.edit().putString("recent_emojis", next.joinToString("\t")).apply()
+    }
 }

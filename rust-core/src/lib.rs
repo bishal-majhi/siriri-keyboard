@@ -13,17 +13,17 @@ pub mod layout;
 pub mod store;
 pub mod translit;
 
-/// Typing mode. The numeric values are shared with Kotlin (`Mode.kt`).
+/// Typing mode. The numeric values are shared with Kotlin (`Mode` in `Types.kt`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
 pub enum Mode {
-    /// "A"  - English, QWERTY.
+    /// "En" - English, QWERTY.
     English = 0,
-    /// "क"  - Traditional Nepali, 11-column Devanagari.
+    /// "ने" - Traditional Nepali, 11-column Devanagari.
     Nepali = 1,
-    /// "ने" - Nepali Roman (phonetic: type "namaste" -> नमस्ते).
+    /// "Np" - Roman Nepali (phonetic: type "namaste" -> नमस्ते).
     NepaliRoman = 2,
-    /// "हि" - Hindi Roman (phonetic).
+    /// "Hi" - Hindi Roman (phonetic).
     HindiRoman = 3,
 }
 
