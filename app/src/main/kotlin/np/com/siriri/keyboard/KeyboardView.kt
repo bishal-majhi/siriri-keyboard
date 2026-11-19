@@ -9,6 +9,7 @@ import android.graphics.Typeface
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.TextPaint
 import android.text.TextUtils
 import android.util.SparseArray
@@ -16,8 +17,10 @@ import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.SoundEffectConstants
+import android.view.VelocityTracker
 import android.view.View
 import android.view.WindowInsets
+import android.widget.OverScroller
 
 /**
  * The whole keyboard is ONE custom view drawn straight onto a Canvas: no child
@@ -41,6 +44,9 @@ class KeyboardView(context: Context) : View(context) {
         fun onReturn()
         fun onSuggestion(index: Int)
         fun onSuggestionLong(index: Int)
+        fun onBackspaceWord()
+        fun onClipboardPaste()
+        fun onClipboardDismiss()
     }
 
     var listener: Listener? = null
@@ -260,6 +266,7 @@ class KeyboardView(context: Context) : View(context) {
     private val barDown = SparseArray<Int>()
     private val handler = Handler(Looper.getMainLooper())
     private var repeatPointer = -1
+    private var repeatStartTime = 0L
     private var globePointer = -1
     private var globeLongFired = false
     private var barLongPointer = -1
@@ -269,8 +276,28 @@ class KeyboardView(context: Context) : View(context) {
     private var spacePointer = -1
     private var spaceLastX = 0f
     private var spaceSlid = false
+    private var clipboardCandidate: String? = null
+    private var clipboardDown = false
+    private var tappedSuggestionSlot = -1
+    private val clearTapFeedbackRunnable = Runnable {
+        tappedSuggestionSlot = -1
+        invalidate()
+    }
 
     // ---- emoji touch tracking ------------------------------------------------
+    private val scroller = OverScroller(context)
+    private var velocityTracker: VelocityTracker? = null
+    private val flingRunnable = object : Runnable {
+        override fun run() {
+            if (scroller.computeScrollOffset()) {
+                emojiScrollY = scroller.currY.toFloat().coerceIn(0f, emojiMaxScroll())
+                invalidate()
+                if (!scroller.isFinished) {
+                    postOnAnimation(this)
+                }
+            }
+        }
+    }
     private var emojiGridPointer = -1
     private var emojiTouchStartY = 0f
     private var emojiLastY = 0f
@@ -283,8 +310,15 @@ class KeyboardView(context: Context) : View(context) {
 
     private val repeatRunnable = object : Runnable {
         override fun run() {
-            listener?.onBackspace()
-            handler.postDelayed(this, 45)
+            val elapsed = SystemClock.uptimeMillis() - repeatStartTime
+            if (elapsed > 1200L) {
+                if (haptics) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                listener?.onBackspaceWord()
+                handler.postDelayed(this, 150L)
+            } else {
+                listener?.onBackspace()
+                handler.postDelayed(this, 45L)
+            }
         }
     }
     private val globeLongRunnable = Runnable {
@@ -356,6 +390,14 @@ class KeyboardView(context: Context) : View(context) {
 
     fun suggestionAt(i: Int): String = suggestions.getOrElse(i) { "" }
 
+    fun setClipboardCandidate(candidate: String?) {
+        if (clipboardCandidate != candidate) {
+            clipboardCandidate = candidate
+            clipboardDown = false
+            if (barVisible) invalidate()
+        }
+    }
+
     fun setBarVisible(v: Boolean) {
         if (v == barVisible) return
         barVisible = v
@@ -370,6 +412,10 @@ class KeyboardView(context: Context) : View(context) {
         val changed = emojiOpen != open
         emojiOpen = open
         if (changed) {
+            scroller.abortAnimation()
+            removeCallbacks(flingRunnable)
+            velocityTracker?.recycle()
+            velocityTracker = null
             emojiScrollY = 0f
             emojiDownIndex = -1
             emojiGridPointer = -1
@@ -494,17 +540,125 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     private fun drawSuggestions(canvas: Canvas) {
+        val clip = clipboardCandidate
+        if (clip != null) {
+            drawClipboardChip(canvas, clip)
+            return
+        }
+
         val slotW = m.contentWidth / 3f
+        val hasSuggestions = suggestions.any { it.isNotEmpty() }
+
+        // Slot background highlight on touch/tap
+        for (i in 0..2) {
+            if (suggestions[i].isEmpty()) continue
+            val isPressed = (barDown.indexOfValue(i) >= 0) || (tappedSuggestionSlot == i)
+            if (isPressed) {
+                fill.style = Paint.Style.FILL
+                fill.color = theme.charPressed
+                rect.set(
+                    m.contentLeft + slotW * i + dp(3f),
+                    dp(4f),
+                    m.contentLeft + slotW * (i + 1) - dp(3f),
+                    barHeight - dp(4f)
+                )
+                canvas.drawRoundRect(rect, keyRadius, keyRadius, fill)
+            }
+        }
+
+        // Thin divider lines between slots
+        if (hasSuggestions) {
+            val divTop = dp(9f)
+            val divBottom = barHeight - dp(9f)
+            val prevStrokeW = stroke.strokeWidth
+            val prevStrokeColor = stroke.color
+            stroke.strokeWidth = dp(0.8f)
+            stroke.color = theme.hint
+            stroke.alpha = 75
+            val x1 = m.contentLeft + slotW
+            val x2 = m.contentLeft + slotW * 2f
+            if (suggestions[0].isNotEmpty() || suggestions[1].isNotEmpty()) {
+                canvas.drawLine(x1, divTop, x1, divBottom, stroke)
+            }
+            if (suggestions[1].isNotEmpty() || suggestions[2].isNotEmpty()) {
+                canvas.drawLine(x2, divTop, x2, divBottom, stroke)
+            }
+            stroke.alpha = 255
+            stroke.strokeWidth = prevStrokeW
+            stroke.color = prevStrokeColor
+        }
+
+        // Suggestion labels
         suggestionPaint.color = theme.suggestion
-        suggestionPaint.textSize = sp(m.suggestionSp)
+        val baseSize = sp(m.suggestionSp)
         val fm = suggestionPaint.fontMetrics
         val baseline = barHeight / 2f - (fm.ascent + fm.descent) / 2f
         for (i in 0..2) {
             val s = suggestions[i]
             if (s.isEmpty()) continue
+            val isPrimary = (i == 1 && suggestions[1].isNotEmpty()) ||
+                (i == 0 && suggestions[1].isEmpty() && suggestions[2].isEmpty())
+            suggestionPaint.textSize = if (isPrimary) baseSize * 1.05f else baseSize
+            suggestionPaint.isFakeBoldText = isPrimary
             val fitted = TextUtils.ellipsize(s, suggestionPaint, slotW - dp(16f), TextUtils.TruncateAt.END)
             canvas.drawText(fitted.toString(), m.contentLeft + slotW * i + slotW / 2f, baseline, suggestionPaint)
         }
+        suggestionPaint.isFakeBoldText = false
+    }
+
+    private fun drawClipboardChip(canvas: Canvas, textStr: String) {
+        val chipL = m.contentLeft + dp(6f)
+        val chipR = m.contentRight - dp(6f)
+        val chipT = dp(4f)
+        val chipB = barHeight - dp(4f)
+        val closeW = dp(36f)
+        val closeL = chipR - closeW
+
+        // Drop shadow
+        fill.style = Paint.Style.FILL
+        fill.color = theme.shadow
+        rect.set(chipL, chipT + shadowDy, chipR, chipB + shadowDy)
+        canvas.drawRoundRect(rect, keyRadius, keyRadius, fill)
+
+        // Chip body
+        val bg = if (clipboardDown) theme.charPressed else theme.charKey
+        rect.set(chipL, chipT, chipR, chipB)
+        fill.color = bg
+        canvas.drawRoundRect(rect, keyRadius, keyRadius, fill)
+
+        // Divider before close button
+        val prevStrokeW = stroke.strokeWidth
+        val prevStrokeColor = stroke.color
+        stroke.strokeWidth = dp(0.8f)
+        stroke.color = theme.shadow
+        canvas.drawLine(closeL, chipT + dp(4f), closeL, chipB - dp(4f), stroke)
+        stroke.strokeWidth = prevStrokeW
+        stroke.color = prevStrokeColor
+
+        // Dismiss ✕ button
+        text.color = theme.hint
+        text.textSize = sp(m.modTextSp * 0.95f)
+        val fm = text.fontMetrics
+        val cy = (chipT + chipB) / 2f - (fm.ascent + fm.descent) / 2f
+        canvas.drawText("✕", closeL + closeW / 2f, cy, text)
+
+        // Paste preview
+        suggestionPaint.color = theme.label
+        suggestionPaint.textSize = sp(m.suggestionSp * 0.92f)
+        suggestionPaint.isFakeBoldText = false
+        val sFm = suggestionPaint.fontMetrics
+        val sCy = (chipT + chipB) / 2f - (sFm.ascent + sFm.descent) / 2f
+
+        val actionPrefix = if (mode == Mode.NEPALI) "📋 टाँस्नुहोस्: " else "📋 Paste: "
+        val prefixW = suggestionPaint.measureText(actionPrefix)
+        val availBodyW = (closeL - chipL - dp(18f) - prefixW).coerceAtLeast(dp(20f))
+        val oneLine = textStr.replace('\n', ' ').trim()
+        val ellipBody = TextUtils.ellipsize(oneLine, suggestionPaint, availBodyW, TextUtils.TruncateAt.END)
+        val fullDisplay = actionPrefix + ellipBody
+
+        suggestionPaint.textAlign = Paint.Align.LEFT
+        canvas.drawText(fullDisplay, chipL + dp(12f), sCy, suggestionPaint)
+        suggestionPaint.textAlign = Paint.Align.CENTER
     }
 
     private fun isPressed(k: KeyDef): Boolean {
@@ -565,7 +719,16 @@ class KeyboardView(context: Context) : View(context) {
                 }
             }
             KeyKind.NUM, KeyKind.SYM, KeyKind.ABC -> drawLabel(canvas, k.base, k, cx, cy, fg, m.modTextSp)
-            KeyKind.SPACE -> Unit
+            KeyKind.SPACE -> {
+                val lbl = mode.spaceLabel
+                text.color = theme.hint
+                text.textSize = sp(m.modTextSp * 0.88f)
+                val maxW = (k.right - k.left) - dp(16f)
+                val w = text.measureText(lbl)
+                if (w > maxW) text.textSize = text.textSize * maxW / w
+                val fm = text.fontMetrics
+                canvas.drawText(lbl, cx, cy - (fm.ascent + fm.descent) / 2f, text)
+            }
             KeyKind.SHIFT -> drawShift(canvas, cx, cy, s)
             KeyKind.BKSP -> drawBackspace(canvas, cx, cy, s)
             KeyKind.EMOJI -> drawEmojiIcon(canvas, cx, cy, s)
@@ -854,6 +1017,10 @@ class KeyboardView(context: Context) : View(context) {
     // ---- touch ---------------------------------------------------------------------
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (emojiOpen) {
+            if (velocityTracker == null) velocityTracker = VelocityTracker.obtain()
+            velocityTracker?.addMovement(e)
+        }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val i = e.actionIndex
@@ -965,6 +1132,8 @@ class KeyboardView(context: Context) : View(context) {
 
         if (emojiOpen) {
             if (y < barHeight) {
+                scroller.abortAnimation()
+                removeCallbacks(flingRunnable)
                 val nextCat = emojiCategoryAt(x)
                 if (nextCat != emojiCategoryIndex) {
                     emojiCategoryIndex = nextCat
@@ -995,14 +1164,17 @@ class KeyboardView(context: Context) : View(context) {
                     KeyKind.BKSP -> {
                         l.onBackspace()
                         repeatPointer = id
+                        repeatStartTime = SystemClock.uptimeMillis()
                         handler.removeCallbacks(repeatRunnable)
-                        handler.postDelayed(repeatRunnable, 400)
+                        handler.postDelayed(repeatRunnable, 360)
                     }
                     else -> Unit
                 }
                 return
             }
             val idx = emojiIndexAt(x, y)
+            scroller.abortAnimation()
+            removeCallbacks(flingRunnable)
             emojiGridPointer = id
             emojiTouchStartY = y
             emojiLastY = y
@@ -1013,8 +1185,22 @@ class KeyboardView(context: Context) : View(context) {
         }
 
         if (barVisible && y < barHeight) {
+            if (clipboardCandidate != null) {
+                val chipR = m.contentRight - dp(6f)
+                val closeW = dp(36f)
+                val closeL = chipR - closeW
+                if (x >= closeL) {
+                    feedback()
+                    listener?.onClipboardDismiss()
+                } else {
+                    clipboardDown = true
+                    invalidate()
+                }
+                return
+            }
             val slot = suggestionSlotAt(x)
             barDown.put(id, slot)
+            invalidate()
             barLongPointer = id
             barLongFired = false
             handler.postDelayed(barLongRunnable, 500)
@@ -1055,8 +1241,9 @@ class KeyboardView(context: Context) : View(context) {
             KeyKind.BKSP -> {
                 l.onBackspace()
                 repeatPointer = id
+                repeatStartTime = SystemClock.uptimeMillis()
                 handler.removeCallbacks(repeatRunnable)
-                handler.postDelayed(repeatRunnable, 400)
+                handler.postDelayed(repeatRunnable, 360)
             }
             KeyKind.GLOBE -> {
                 globePointer = id
@@ -1074,17 +1261,53 @@ class KeyboardView(context: Context) : View(context) {
             emojiGridPointer = -1
             emojiScrolling = false
             emojiDownIndex = -1
-            if (!wasScrolling && idx >= 0) {
-                val emojis = activeEmojis()
-                if (idx < emojis.size) {
-                    val emoji = emojis[idx]
-                    val b = emojiCellBounds(idx)
-                    showLingerPopup(b.left + dp(2f), b.top + dp(2f), b.right - dp(2f), b.bottom - dp(2f), emoji)
-                    feedback()
-                    listener?.onEmojiPick(emoji)
+            if (wasScrolling) {
+                val vt = velocityTracker
+                if (vt != null) {
+                    vt.computeCurrentVelocity(1000)
+                    val vy = vt.yVelocity
+                    if (kotlin.math.abs(vy) > dp(100f)) {
+                        scroller.fling(
+                            0, emojiScrollY.toInt(),
+                            0, (-vy).toInt(),
+                            0, 0,
+                            0, emojiMaxScroll().toInt()
+                        )
+                        postOnAnimation(flingRunnable)
+                    }
+                    vt.recycle()
+                    velocityTracker = null
+                }
+            } else {
+                velocityTracker?.recycle()
+                velocityTracker = null
+                if (idx >= 0) {
+                    val emojis = activeEmojis()
+                    if (idx < emojis.size) {
+                        val emoji = emojis[idx]
+                        val b = emojiCellBounds(idx)
+                        showLingerPopup(b.left + dp(2f), b.top + dp(2f), b.right - dp(2f), b.bottom - dp(2f), emoji)
+                        feedback()
+                        listener?.onEmojiPick(emoji)
+                    }
                 }
             }
             invalidate()
+            return
+        }
+
+        if (clipboardDown) {
+            clipboardDown = false
+            invalidate()
+            if (y < barHeight) {
+                val chipR = m.contentRight - dp(6f)
+                val closeW = dp(36f)
+                val closeL = chipR - closeW
+                if (x < closeL) {
+                    feedback()
+                    listener?.onClipboardPaste()
+                }
+            }
             return
         }
 
@@ -1094,9 +1317,17 @@ class KeyboardView(context: Context) : View(context) {
             if (id == barLongPointer) {
                 handler.removeCallbacks(barLongRunnable)
                 if (!barLongFired && y < barHeight && slot == suggestionSlotAt(x)) {
+                    tappedSuggestionSlot = slot
+                    handler.removeCallbacks(clearTapFeedbackRunnable)
+                    handler.postDelayed(clearTapFeedbackRunnable, 90L)
+                    invalidate()
                     feedback()
                     listener?.onSuggestion(slot)
+                } else {
+                    invalidate()
                 }
+            } else {
+                invalidate()
             }
             return
         }
@@ -1132,6 +1363,13 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     private fun cancelAll() {
+        scroller.abortAnimation()
+        removeCallbacks(flingRunnable)
+        velocityTracker?.recycle()
+        velocityTracker = null
+        clipboardDown = false
+        tappedSuggestionSlot = -1
+        handler.removeCallbacks(clearTapFeedbackRunnable)
         handler.removeCallbacks(repeatRunnable)
         handler.removeCallbacks(globeLongRunnable)
         handler.removeCallbacks(barLongRunnable)

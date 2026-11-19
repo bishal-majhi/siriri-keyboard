@@ -1,5 +1,6 @@
 package np.com.siriri.keyboard
 
+import android.content.ClipboardManager
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
@@ -62,6 +63,15 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     private var selStart = 0
     private var selEnd = 0
 
+    // ---- clipboard quick-paste state ----
+    private var clipboardManager: ClipboardManager? = null
+    private var clipboardText: String? = null
+    private var lastPastedText: String? = null
+    private var clipTimestamp = 0L
+    private val clipListener = ClipboardManager.OnPrimaryClipChangedListener {
+        checkClipboard(isNewClip = true)
+    }
+
     // ------------------------------------------------------------------------------
     // Lifecycle
     // ------------------------------------------------------------------------------
@@ -71,6 +81,11 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
         Native.init(filesDir.absolutePath)
         prefs = Prefs(this)
         mode = prefs.mode
+        try {
+            clipboardManager = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager
+            clipboardManager?.addPrimaryClipChangedListener(clipListener)
+        } catch (_: Throwable) {
+        }
         // Transparent window so the 20dp rounded top corners show.
         try {
             window?.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -171,10 +186,14 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
         kb.haptics = prefs.haptic
         kb.sound = prefs.sound
         kb.setEmojiOpen(false, prefs.recentEmojis())
+        dismissClipboard()
         resync()
         pushModeToView()
         updateAutoShift()
         updateReturnKey()
+        if (!latinOnly && !incognito && barAllowed) {
+            checkClipboard(isNewClip = false)
+        }
         refreshSuggestions()
     }
 
@@ -193,6 +212,10 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onDestroy() {
+        try {
+            clipboardManager?.removePrimaryClipChangedListener(clipListener)
+        } catch (_: Throwable) {
+        }
         Native.save()
         io.shutdown()
         super.onDestroy()
@@ -301,6 +324,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     // ------------------------------------------------------------------------------
 
     override fun onText(text: String) {
+        dismissClipboard()
         val c = text[0]
         val latinLetter = text.length == 1 && (c in 'a'..'z' || c in 'A'..'Z')
         if (mode.roman && latinLetter) {
@@ -326,6 +350,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onLongChar(text: String) {
+        dismissClipboard()
         if (mode.roman && roman.isNotEmpty()) {
             roman.setLength(roman.length - 1)
             if (roman.isEmpty()) {
@@ -366,6 +391,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onSpace() {
+        dismissClipboard()
         if (currentInputConnection == null) return
         val now = SystemClock.uptimeMillis()
         val hadWord = if (mode.roman && roman.isNotEmpty()) {
@@ -394,6 +420,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onBackspace() {
+        dismissClipboard()
         val ic = currentInputConnection ?: return
         spaceAfterWord = false
         if (roman.isNotEmpty()) {
@@ -423,7 +450,49 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
         refreshSuggestions()
     }
 
+    override fun onBackspaceWord() {
+        dismissClipboard()
+        val ic = currentInputConnection ?: return
+        spaceAfterWord = false
+        if (roman.isNotEmpty()) {
+            roman.setLength(0)
+            commit("")
+            refreshSuggestions()
+            return
+        }
+        if (selEnd > selStart) {
+            pred = selStart
+            commit("")
+            word.setLength(0)
+            resync()
+            updateAutoShift()
+            refreshSuggestions()
+            return
+        }
+        val before = ic.getTextBeforeCursor(64, 0)?.toString() ?: ""
+        if (before.isEmpty()) {
+            sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+            return
+        }
+        var i = before.length
+        // Skip trailing whitespace
+        while (i > 0 && before[i - 1].isWhitespace()) i--
+        // Skip non-word punctuation vs preceding word characters
+        if (i > 0 && !isWordChar(before[i - 1])) {
+            while (i > 0 && !isWordChar(before[i - 1]) && !before[i - 1].isWhitespace()) i--
+        } else {
+            while (i > 0 && isWordChar(before[i - 1])) i--
+        }
+        val toDelete = (before.length - i).coerceAtLeast(1)
+        deleteBefore(toDelete)
+        word.setLength(0)
+        resync()
+        updateAutoShift()
+        refreshSuggestions()
+    }
+
     override fun onShift() {
+        dismissClipboard()
         val now = SystemClock.uptimeMillis()
         shift = when {
             shift == ShiftState.LOCK -> ShiftState.OFF
@@ -437,6 +506,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onPage(page: Int) {
+        dismissClipboard()
         if (emojiOpen) {
             emojiOpen = false
             kb.setEmojiOpen(false, prefs.recentEmojis())
@@ -446,6 +516,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onEmojiToggle() {
+        dismissClipboard()
         if (!emojiOpen) {
             commitComposing(learn = true)
             learnWord(word.toString())
@@ -456,6 +527,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onEmojiPick(emoji: String) {
+        dismissClipboard()
         if (currentInputConnection == null || emoji.isEmpty()) return
         if (mode.roman) commitComposing(learn = true)
         learnWord(word.toString())
@@ -469,6 +541,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onGlobe() {
+        dismissClipboard()
         if (latinOnly) return // password / URL / number fields stay Latin
         commitComposing(learn = true)
         learnWord(word.toString())
@@ -489,6 +562,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onReturn() {
+        dismissClipboard()
         val ic = currentInputConnection ?: return
         commitComposing(learn = true)
         learnWord(word.toString())
@@ -515,10 +589,63 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
     }
 
     // ------------------------------------------------------------------------------
+    // Clipboard Quick-Paste
+    // ------------------------------------------------------------------------------
+
+    private fun checkClipboard(isNewClip: Boolean) {
+        if (latinOnly || !barAllowed) return
+        try {
+            val cm = clipboardManager ?: return
+            if (!cm.hasPrimaryClip()) return
+            val clip = cm.primaryClip ?: return
+            if (clip.itemCount == 0) return
+            val item = clip.getItemAt(0) ?: return
+            val text = item.coerceToText(this)?.toString()?.trim() ?: return
+            if (text.isEmpty() || text == lastPastedText) return
+            val now = SystemClock.uptimeMillis()
+            if (isNewClip) {
+                clipTimestamp = now
+            } else {
+                val desc = clip.description
+                val ageMs = System.currentTimeMillis() - desc.timestamp
+                if (ageMs > 60_000L && clipTimestamp == 0L) return
+            }
+            clipboardText = text
+            kb.setClipboardCandidate(text)
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun dismissClipboard() {
+        if (clipboardText != null) {
+            clipboardText = null
+            kb.setClipboardCandidate(null)
+            refreshSuggestions()
+        }
+    }
+
+    override fun onClipboardPaste() {
+        val text = clipboardText ?: return
+        commitComposing(learn = true)
+        commit(text)
+        lastPastedText = text
+        clipboardText = null
+        kb.setClipboardCandidate(null)
+        spaceAfterWord = false
+        updateAutoShift()
+        refreshSuggestions()
+    }
+
+    override fun onClipboardDismiss() {
+        dismissClipboard()
+    }
+
+    // ------------------------------------------------------------------------------
     // Suggestions
     // ------------------------------------------------------------------------------
 
     override fun onSuggestion(index: Int) {
+        dismissClipboard()
         val s = kb.suggestionAt(index)
         if (s.isEmpty()) return
         val isEmoji = EmojiCatalog.isEmoji(s)

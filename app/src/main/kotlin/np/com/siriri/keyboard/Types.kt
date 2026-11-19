@@ -13,6 +13,13 @@ enum class Mode(val id: Int, val badge: String, val roman: Boolean, val title: S
     /** Sentence terminator inserted by double-space. */
     val sentenceEnd: String get() = if (this == ENGLISH) "." else "।"
 
+    val spaceLabel: String get() = when (this) {
+        ENGLISH -> "English"
+        NEPALI -> "नेपाली"
+        HINDI_ROMAN -> "Hindi"
+        NEPALI_ROMAN -> "Nepali"
+    }
+
     fun next(): Mode {
         val idx = CYCLE_ORDER.indexOf(this)
         return CYCLE_ORDER[(idx + 1) % CYCLE_ORDER.size]
