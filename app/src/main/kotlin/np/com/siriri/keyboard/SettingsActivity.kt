@@ -223,8 +223,13 @@ class SettingsActivity : Activity() {
         }
         hero.addView(title)
 
+        val verName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.4"
+        } catch (_: Throwable) {
+            "1.0.4"
+        }
         val subtitle = TextView(this).apply {
-            text = "Privacy-First · Offline · v1.0.3"
+            text = "Privacy-First · Offline · v$verName"
             textSize = 13.5f
             setTextColor(colorTextSecondary)
             gravity = Gravity.CENTER
