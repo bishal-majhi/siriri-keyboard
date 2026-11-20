@@ -186,6 +186,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
         kb.haptics = prefs.haptic
         kb.sound = prefs.sound
         kb.setEmojiOpen(false, prefs.recentEmojis())
+        kb.requestApplyInsets()
         dismissClipboard()
         resync()
         pushModeToView()
@@ -571,8 +572,7 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
         spaceAfterWord = false
 
         val info = currentInputEditorInfo
-        val plain = multiLine || noEnter ||
-            action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED
+        val plain = isPlainEnter()
         if (plain) {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
             if (pred >= 0) {
@@ -741,10 +741,21 @@ class SiririKeyboardService : InputMethodService(), KeyboardView.Listener {
      * Plain white key + ↵ in multi-line boxes; muted grey when a search/submit
      * field is empty; solid blue when there is something to submit.
      */
+    private fun isPlainEnter(): Boolean {
+        if (noEnter || action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED) {
+            return true
+        }
+        // Only treat multiline as plain Enter when the editor didn't request a specific submit/navigation action.
+        return multiLine && action != EditorInfo.IME_ACTION_SEARCH &&
+            action != EditorInfo.IME_ACTION_GO &&
+            action != EditorInfo.IME_ACTION_SEND &&
+            action != EditorInfo.IME_ACTION_DONE &&
+            action != EditorInfo.IME_ACTION_NEXT &&
+            action != EditorInfo.IME_ACTION_PREVIOUS
+    }
+
     private fun updateReturnKey() {
-        val plain = multiLine || noEnter ||
-            action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED
-        if (plain) {
+        if (isPlainEnter()) {
             kb.setReturn(ReturnStyle.NEUTRAL, ReturnGlyph.ENTER)
             return
         }

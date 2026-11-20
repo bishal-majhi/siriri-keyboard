@@ -444,10 +444,24 @@ class KeyboardView(context: Context) : View(context) {
         return topPad + n * rowH + (n - 1) * vGap + bottomPad + bottomInset
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        requestApplyInsets()
+    }
+
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
         val (l, r, b) = if (Build.VERSION.SDK_INT >= 30) {
-            val ins = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            Triple(ins.left, ins.right, ins.bottom)
+            val ins = insets.getInsets(
+                WindowInsets.Type.systemBars() or
+                    WindowInsets.Type.displayCutout() or
+                    WindowInsets.Type.mandatorySystemGestures() or
+                    WindowInsets.Type.tappableElement(),
+            )
+            var bottom = ins.bottom
+            if (bottom == 0 && Build.VERSION.SDK_INT >= 35) {
+                bottom = rootWindowInsets?.getInsets(WindowInsets.Type.navigationBars())?.bottom ?: 0
+            }
+            Triple(ins.left, ins.right, bottom)
         } else {
             @Suppress("DEPRECATION")
             Triple(insets.systemWindowInsetLeft, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
@@ -638,10 +652,10 @@ class KeyboardView(context: Context) : View(context) {
         // Dismiss × button – vector cross for crisp rendering
         val closeCx = closeL + closeW / 2f
         val closeCy = (chipT + chipB) / 2f
-        val arm = dp(5f)
+        val arm = dp(4.8f)
         val prevStrokeW2 = stroke.strokeWidth
         val prevStrokeColor2 = stroke.color
-        stroke.strokeWidth = dp(1.6f)
+        stroke.strokeWidth = dp(1.75f)
         stroke.color = theme.hint
         canvas.drawLine(closeCx - arm, closeCy - arm, closeCx + arm, closeCy + arm, stroke)
         canvas.drawLine(closeCx - arm, closeCy + arm, closeCx + arm, closeCy - arm, stroke)
@@ -856,51 +870,53 @@ class KeyboardView(context: Context) : View(context) {
     }
 
     private fun drawEmojiIcon(canvas: Canvas, cx: Float, cy: Float, s: Float) {
-        val r = s * 0.78f
-        // Face circle
+        val r = s * 0.58f
         val prevW = stroke.strokeWidth
-        stroke.strokeWidth = dp(1.6f)
+        stroke.strokeWidth = dp(1.8f)
         canvas.drawCircle(cx, cy, r, stroke)
-        // Eyes – small filled ovals
+        // Eyes
         val prevStyle = fill.style
         fill.style = Paint.Style.FILL
-        val eyeR = r * 0.1f
-        canvas.drawCircle(cx - r * 0.33f, cy - r * 0.18f, eyeR, fill)
-        canvas.drawCircle(cx + r * 0.33f, cy - r * 0.18f, eyeR, fill)
+        val eyeR = r * 0.135f
+        canvas.drawCircle(cx - r * 0.34f, cy - r * 0.16f, eyeR, fill)
+        canvas.drawCircle(cx + r * 0.34f, cy - r * 0.16f, eyeR, fill)
         fill.style = prevStyle
-        // Mouth – wider, gentler smile arc
-        stroke.strokeWidth = dp(1.4f)
-        rect.set(cx - r * 0.46f, cy - r * 0.05f, cx + r * 0.46f, cy + r * 0.56f)
-        canvas.drawArc(rect, 15f, 150f, false, stroke)
+        // Balanced smile arc
+        stroke.strokeWidth = dp(1.7f)
+        rect.set(cx - r * 0.48f, cy - r * 0.24f, cx + r * 0.48f, cy + r * 0.50f)
+        canvas.drawArc(rect, 22f, 136f, false, stroke)
         stroke.strokeWidth = prevW
     }
 
     private fun drawShift(canvas: Canvas, cx: Float, cy: Float, s: Float) {
         val filled = shift != ShiftState.OFF
+        val lock = shift == ShiftState.LOCK
         val prevW = stroke.strokeWidth
-        stroke.strokeWidth = dp(1.6f)
-        // Cleaner iOS-style shift arrow: thinner stem, sharper chevron
-        val arrowH = s * 0.52f   // height of the chevron part
-        val arrowW = s * 0.56f   // half-width of the chevron
-        val stemHW = s * 0.2f    // half-width of the stem
-        val stemH  = s * 0.42f   // height of the stem
-        val topY = cy - s * 0.55f
-        val midY = topY + arrowH
-        val botY = midY + stemH
+        stroke.strokeWidth = dp(1.85f)
+        val yShift = if (lock) -s * 0.08f else 0f
+        val topY = cy - s * 0.54f + yShift
+        val midY = cy + s * 0.04f + yShift
+        val botY = cy + s * 0.48f + yShift
+        val wingW = s * 0.56f
+        val stemHW = s * 0.23f
         path.reset()
-        path.moveTo(cx, topY)                     // tip
-        path.lineTo(cx + arrowW, midY)             // right wing tip
-        path.lineTo(cx + stemHW, midY)             // right wing inner
-        path.lineTo(cx + stemHW, botY)             // right stem bottom
-        path.lineTo(cx - stemHW, botY)             // left stem bottom
-        path.lineTo(cx - stemHW, midY)             // left wing inner
-        path.lineTo(cx - arrowW, midY)             // left wing tip
+        path.moveTo(cx, topY)
+        path.lineTo(cx + wingW, midY)
+        path.lineTo(cx + stemHW, midY)
+        path.lineTo(cx + stemHW, botY)
+        path.lineTo(cx - stemHW, botY)
+        path.lineTo(cx - stemHW, midY)
+        path.lineTo(cx - wingW, midY)
         path.close()
-        canvas.drawPath(path, if (filled) fill else stroke)
-        // Caps Lock underline bar
-        if (shift == ShiftState.LOCK) {
-            val barY = botY + dp(3f)
-            stroke.strokeWidth = dp(2f)
+        if (filled) {
+            canvas.drawPath(path, fill)
+            canvas.drawPath(path, stroke)
+        } else {
+            canvas.drawPath(path, stroke)
+        }
+        if (lock) {
+            val barY = botY + dp(4f)
+            stroke.strokeWidth = dp(2.2f)
             canvas.drawLine(cx - stemHW, barY, cx + stemHW, barY, stroke)
         }
         stroke.strokeWidth = prevW
@@ -908,28 +924,24 @@ class KeyboardView(context: Context) : View(context) {
 
     private fun drawBackspace(canvas: Canvas, cx: Float, cy: Float, s: Float) {
         val prevW = stroke.strokeWidth
-        stroke.strokeWidth = dp(1.6f)
-        // Rounded delete key outline
-        val h = s * 0.48f   // half-height
-        val rr = dp(3f)     // corner radius for rounded right side
-        val tipX = cx - s * 0.82f
-        val rEdge = cx + s * 0.72f
-        val lEdge = cx - s * 0.3f
+        stroke.strokeWidth = dp(1.8f)
+        val h = s * 0.45f
+        val rr = dp(3.5f)
+        val tipX = cx - s * 0.66f
+        val lEdge = cx - s * 0.24f
+        val rEdge = cx + s * 0.64f
         path.reset()
-        path.moveTo(tipX, cy)                           // left arrow tip
-        path.lineTo(lEdge, cy - h)                      // top left
-        // Top edge to rounded top-right corner
+        path.moveTo(tipX, cy)
+        path.lineTo(lEdge, cy - h)
         path.lineTo(rEdge - rr, cy - h)
         path.quadTo(rEdge, cy - h, rEdge, cy - h + rr)
-        // Right edge to rounded bottom-right corner
         path.lineTo(rEdge, cy + h - rr)
         path.quadTo(rEdge, cy + h, rEdge - rr, cy + h)
-        path.lineTo(lEdge, cy + h)                      // bottom left
+        path.lineTo(lEdge, cy + h)
         path.close()
         canvas.drawPath(path, stroke)
-        // × inside
-        val xc = (lEdge + rEdge) / 2f
-        val xs = s * 0.18f
+        val xc = (lEdge + rEdge) * 0.5f + dp(0.5f)
+        val xs = s * 0.19f
         canvas.drawLine(xc - xs, cy - xs, xc + xs, cy + xs, stroke)
         canvas.drawLine(xc - xs, cy + xs, xc + xs, cy - xs, stroke)
         stroke.strokeWidth = prevW
@@ -1024,56 +1036,56 @@ class KeyboardView(context: Context) : View(context) {
 
     private fun drawReturn(canvas: Canvas, cx: Float, cy: Float, s: Float) {
         val prevW = stroke.strokeWidth
-        stroke.strokeWidth = dp(1.6f)
+        val bold = retStyle == ReturnStyle.BLUE
+        stroke.strokeWidth = dp(if (bold) 2.0f else 1.85f)
         when (retGlyph) {
             ReturnGlyph.ENTER -> {
-                // ⏎  Clean bent-arrow return glyph
-                val topR = cx + s * 0.5f
-                val topY = cy - s * 0.42f
-                val midY = cy + s * 0.08f
-                val botL = cx - s * 0.5f
+                // ⏎  Sleek rounded-elbow return arrow, optically centered
+                val rightX = cx + s * 0.46f
+                val leftX = cx - s * 0.46f
+                val topY = cy - s * 0.36f
+                val midY = cy + s * 0.10f
+                val elbowR = dp(3f)
                 path.reset()
-                path.moveTo(topR, topY)
-                path.lineTo(topR, midY)
-                path.lineTo(botL, midY)
+                path.moveTo(rightX, topY)
+                path.lineTo(rightX, midY - elbowR)
+                path.quadTo(rightX, midY, rightX - elbowR, midY)
+                path.lineTo(leftX, midY)
                 // Arrowhead
-                path.moveTo(botL + s * 0.32f, midY - s * 0.28f)
-                path.lineTo(botL, midY)
-                path.lineTo(botL + s * 0.32f, midY + s * 0.28f)
+                path.moveTo(leftX + s * 0.28f, midY - s * 0.26f)
+                path.lineTo(leftX, midY)
+                path.lineTo(leftX + s * 0.28f, midY + s * 0.26f)
                 canvas.drawPath(path, stroke)
             }
             ReturnGlyph.SEARCH -> {
-                // 🔍  Magnifying glass
-                val r = s * 0.36f
-                val oX = cx - s * 0.1f
-                val oY = cy - s * 0.1f
+                // 🔍  Balanced magnifying glass
+                val r = s * 0.35f
+                val oX = cx - s * 0.12f
+                val oY = cy - s * 0.12f
                 canvas.drawCircle(oX, oY, r, stroke)
-                // Handle – thicker
-                stroke.strokeWidth = dp(2f)
+                stroke.strokeWidth = dp(2.1f)
                 val hx = oX + r * 0.707f
                 val hy = oY + r * 0.707f
-                canvas.drawLine(hx, hy, hx + s * 0.32f, hy + s * 0.32f, stroke)
-                stroke.strokeWidth = dp(1.6f)
+                canvas.drawLine(hx, hy, cx + s * 0.46f, cy + s * 0.46f, stroke)
             }
             ReturnGlyph.ARROW -> {
                 // →  Right-pointing arrow (Go / Send / Next)
-                val lx = cx - s * 0.52f
-                val rx = cx + s * 0.52f
+                val lx = cx - s * 0.48f
+                val rx = cx + s * 0.46f
                 canvas.drawLine(lx, cy, rx, cy, stroke)
-                // Arrowhead
                 path.reset()
-                path.moveTo(rx - s * 0.32f, cy - s * 0.3f)
+                path.moveTo(rx - s * 0.30f, cy - s * 0.28f)
                 path.lineTo(rx, cy)
-                path.lineTo(rx - s * 0.32f, cy + s * 0.3f)
+                path.lineTo(rx - s * 0.30f, cy + s * 0.28f)
                 canvas.drawPath(path, stroke)
             }
             ReturnGlyph.CHECK -> {
-                // ✓  Checkmark (Done)
-                stroke.strokeWidth = dp(2f)
+                // ✓  Clean checkmark (Done)
+                stroke.strokeWidth = dp(2.15f)
                 path.reset()
-                path.moveTo(cx - s * 0.45f, cy + s * 0.02f)
-                path.lineTo(cx - s * 0.1f, cy + s * 0.38f)
-                path.lineTo(cx + s * 0.52f, cy - s * 0.38f)
+                path.moveTo(cx - s * 0.42f, cy + s * 0.02f)
+                path.lineTo(cx - s * 0.12f, cy + s * 0.34f)
+                path.lineTo(cx + s * 0.46f, cy - s * 0.32f)
                 canvas.drawPath(path, stroke)
             }
         }
