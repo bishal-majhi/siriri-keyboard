@@ -1,4 +1,4 @@
-# 🇳🇵 Siriri Nepali Keyboard
+# 🇳🇵 Siriri Keyboard
 
 <p align="center">
   <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="108" height="108" alt="Siriri Keyboard Logo" style="border-radius: 24px;" />
@@ -10,12 +10,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/bishal-majhi/siriri-nepali-keyboard/releases"><img src="https://img.shields.io/badge/Release-v1.0.4-blue.svg?style=flat-square" alt="Release v1.0.4" /></a>
+  <a href="https://github.com/bishal-majhi/siriri-keyboard/releases"><img src="https://img.shields.io/badge/Release-v1.0.4-blue.svg?style=flat-square" alt="Release v1.0.4" /></a>
   <a href="https://developer.android.com"><img src="https://img.shields.io/badge/Android-8.0%2B%20(API%2026--36)-3DDC84.svg?style=flat-square&logo=android&logoColor=white" alt="Android 8.0+" /></a>
   <a href="PRIVACY.md"><img src="https://img.shields.io/badge/Permissions-0%20(No%20Internet)-brightgreen.svg?style=flat-square" alt="Zero Permissions" /></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/Engine-Rust%202021-orange.svg?style=flat-square&logo=rust&logoColor=white" alt="Rust 2021" /></a>
   <a href="https://kotlinlang.org"><img src="https://img.shields.io/badge/Shell-Pure%20Kotlin-7F52FF.svg?style=flat-square&logo=kotlin&logoColor=white" alt="Kotlin" /></a>
-  <a href="https://github.com/bishal-majhi/siriri-nepali-keyboard"><img src="https://img.shields.io/badge/APK%20Size-1.5%20MB-informational.svg?style=flat-square" alt="1.5 MB APK" /></a>
+  <a href="https://github.com/bishal-majhi/siriri-keyboard"><img src="https://img.shields.io/badge/APK%20Size-1.5%20MB-informational.svg?style=flat-square" alt="1.5 MB APK" /></a>
 </p>
 
 ---
@@ -86,7 +86,7 @@ Cycle modes on-the-fly with a single tap on the bottom language key:
 ## 🏗️ Architecture
 
 ```
-siriri-nepali-keyboard/
+siriri-keyboard/
 ├── rust-core/                   # High-performance offline language core (Rust 2021)
 │   ├── src/lib.rs               # Library entry point and module bindings
 │   ├── src/layout.rs            # Keyboard layout definitions & key weights

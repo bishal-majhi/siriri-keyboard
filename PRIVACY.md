@@ -1,9 +1,9 @@
-# Privacy Policy — Siriri Nepali Keyboard
+# Privacy Policy — Siriri Keyboard
 
 **Effective Date:** November 13, 2026  
 **App Name:** Siriri Keyboard  
 **Package ID:** `np.com.siriri.keyboard`  
-**Source Code:** https://github.com/bishal-majhi/siriri-nepali-keyboard
+**Source Code:** https://github.com/bishal-majhi/siriri-keyboard
 
 ## Overview
 
@@ -49,4 +49,4 @@ Because Siriri Keyboard collects no personal data whatsoever and operates 100% o
 ## 7. Changes & Contact
 
 Because this project is open source, any future changes to this policy or the code can be inspected publicly in the repository:
-https://github.com/bishal-majhi/siriri-nepali-keyboard
+https://github.com/bishal-majhi/siriri-keyboard
